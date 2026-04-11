@@ -28,8 +28,12 @@ import type {
   GeminiCliUserTier,
   KimiQuotaRow,
   KimiQuotaState,
+  GithubCopilotQuotaState,
+  GithubCopilotQuotaWindow,
+  GithubCopilotUsagePayload,
 } from '@/types';
 import { apiCallApi, authFilesApi, getApiCallErrorMessage } from '@/services/api';
+import { apiClient } from '@/services/api/client';
 import { useQuotaStore } from '@/stores';
 import {
   ANTIGRAVITY_QUOTA_URLS,
@@ -72,6 +76,7 @@ import {
   isCodexFile,
   isDisabledAuthFile,
   isGeminiCliFile,
+  isGithubCopilotFile,
   isKimiFile,
   isRuntimeOnlyAuthFile,
 } from '@/utils/quota';
@@ -81,7 +86,7 @@ import styles from '@/pages/QuotaPage.module.scss';
 
 type QuotaUpdater<T> = T | ((prev: T) => T);
 
-type QuotaType = 'antigravity' | 'claude' | 'codex' | 'gemini-cli' | 'kimi';
+type QuotaType = 'antigravity' | 'claude' | 'codex' | 'gemini-cli' | 'kimi' | 'github-copilot';
 
 const DEFAULT_ANTIGRAVITY_PROJECT_ID = 'bamboo-precept-lgxtn';
 const QUOTA_PROGRESS_HIGH_THRESHOLD = 70;
@@ -98,11 +103,13 @@ export interface QuotaStore {
   codexQuota: Record<string, CodexQuotaState>;
   geminiCliQuota: Record<string, GeminiCliQuotaState>;
   kimiQuota: Record<string, KimiQuotaState>;
+  githubCopilotQuota: Record<string, GithubCopilotQuotaState>;
   setAntigravityQuota: (updater: QuotaUpdater<Record<string, AntigravityQuotaState>>) => void;
   setClaudeQuota: (updater: QuotaUpdater<Record<string, ClaudeQuotaState>>) => void;
   setCodexQuota: (updater: QuotaUpdater<Record<string, CodexQuotaState>>) => void;
   setGeminiCliQuota: (updater: QuotaUpdater<Record<string, GeminiCliQuotaState>>) => void;
   setKimiQuota: (updater: QuotaUpdater<Record<string, KimiQuotaState>>) => void;
+  setGithubCopilotQuota: (updater: QuotaUpdater<Record<string, GithubCopilotQuotaState>>) => void;
   clearQuotaCache: () => void;
 }
 
@@ -1106,6 +1113,264 @@ const renderClaudeItems = (
   );
 
   return h(Fragment, null, ...nodes);
+};
+
+const GITHUB_COPILOT_SNAPSHOT_KEYS: { key: string; id: string; labelKey: string }[] = [
+  { key: 'premium_interactions', id: 'premium', labelKey: 'github_copilot_quota.premium_interactions' },
+  { key: 'chat', id: 'chat', labelKey: 'github_copilot_quota.chat' },
+  { key: 'completions', id: 'completions', labelKey: 'github_copilot_quota.completions' },
+];
+
+const buildGithubCopilotWindows = (
+  response: GithubCopilotUsagePayload
+): GithubCopilotQuotaWindow[] => {
+  const windows: GithubCopilotQuotaWindow[] = [];
+  const snapshots = response.quota_snapshots;
+  const resetDate = response.quota_reset_date ?? response.limited_user_reset_date ?? null;
+
+  if (snapshots && typeof snapshots === 'object') {
+    for (const { key, id, labelKey } of GITHUB_COPILOT_SNAPSHOT_KEYS) {
+      const detail = snapshots[key];
+      if (!detail) continue;
+      const entitlement = typeof detail.entitlement === 'number' ? detail.entitlement : null;
+      const remaining = typeof detail.remaining === 'number'
+        ? detail.remaining
+        : typeof detail.quota_remaining === 'number'
+          ? detail.quota_remaining
+          : null;
+      const percentRemaining = typeof detail.percent_remaining === 'number'
+        ? detail.percent_remaining
+        : (entitlement !== null && entitlement > 0 && remaining !== null)
+          ? Math.round((remaining / entitlement) * 100)
+          : null;
+      const unlimited = Boolean(detail.unlimited);
+      windows.push({ id, label: key, labelKey, entitlement, remaining, percentRemaining, unlimited, resetDate });
+    }
+
+    const knownKeys = new Set(GITHUB_COPILOT_SNAPSHOT_KEYS.map((k) => k.key));
+    for (const [key, detail] of Object.entries(snapshots)) {
+      if (knownKeys.has(key) || !detail) continue;
+      const entitlement = typeof detail.entitlement === 'number' ? detail.entitlement : null;
+      const remaining = typeof detail.remaining === 'number'
+        ? detail.remaining
+        : typeof detail.quota_remaining === 'number'
+          ? detail.quota_remaining
+          : null;
+      const percentRemaining = typeof detail.percent_remaining === 'number'
+        ? detail.percent_remaining
+        : (entitlement !== null && entitlement > 0 && remaining !== null)
+          ? Math.round((remaining / entitlement) * 100)
+          : null;
+      const unlimited = Boolean(detail.unlimited);
+      windows.push({ id: key, label: key, labelKey: '', entitlement, remaining, percentRemaining, unlimited, resetDate });
+    }
+  }
+
+  const limitedQuotas = response.limited_user_quotas;
+  const monthlyQuotas = response.monthly_quotas;
+  if (limitedQuotas && typeof limitedQuotas === 'object') {
+    for (const [key, remainingVal] of Object.entries(limitedQuotas)) {
+      if (typeof remainingVal !== 'number') continue;
+      const monthly = monthlyQuotas && typeof monthlyQuotas[key] === 'number' ? monthlyQuotas[key] : null;
+      const percentRemaining = monthly !== null && monthly > 0
+        ? Math.round((remainingVal / monthly) * 100)
+        : null;
+      const labelKey = key === 'chat'
+        ? 'github_copilot_quota.chat'
+        : key === 'completions'
+          ? 'github_copilot_quota.completions'
+          : '';
+      windows.push({
+        id: `free-${key}`,
+        label: key,
+        labelKey,
+        entitlement: monthly,
+        remaining: remainingVal,
+        percentRemaining,
+        unlimited: false,
+        resetDate,
+      });
+    }
+  }
+
+  return windows;
+};
+
+const fetchGithubCopilotQuota = async (
+  file: AuthFileItem,
+  t: TFunction
+): Promise<{ planType: string | null; windows: GithubCopilotQuotaWindow[]; resetDate: string | null }> => {
+  const rawAuthIndex = file['auth_index'] ?? file.authIndex;
+  const authIndex = normalizeAuthIndex(rawAuthIndex);
+  if (!authIndex) {
+    throw new Error(t('github_copilot_quota.missing_auth_index'));
+  }
+
+  try {
+    const response = await apiClient.get<GithubCopilotUsagePayload>(
+      '/github-copilot-usage',
+      { params: { auth_index: authIndex } }
+    );
+
+    if (!response) {
+      return { planType: null, windows: [], resetDate: null };
+    }
+
+    const plan = (response.copilot_plan ?? response.copilotPlan ?? '').toString().trim().toLowerCase();
+    let planType: string | null = null;
+    if (plan.includes('enterprise')) planType = 'enterprise';
+    else if (plan.includes('business')) planType = 'business';
+    else if (plan.includes('individual')) planType = 'individual';
+    else if (plan.includes('pro')) planType = 'pro';
+    else if (plan.includes('free')) planType = 'free';
+    else if (plan) planType = plan;
+
+    const windows = buildGithubCopilotWindows(response);
+    const resetDate = response.quota_reset_date ?? response.limited_user_reset_date ?? null;
+
+    return { planType, windows, resetDate };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : t('common.unknown_error');
+    throw new Error(message);
+  }
+};
+
+const renderGithubCopilotItems = (
+  quota: GithubCopilotQuotaState,
+  t: TFunction,
+  helpers: QuotaRenderHelpers
+): ReactNode => {
+  const { styles: styleMap, QuotaProgressBar } = helpers;
+  const { createElement: h, Fragment } = React;
+  const planType = quota.planType ?? null;
+  const windows = quota.windows ?? [];
+  const resetDate = quota.resetDate ?? null;
+  const nodes: ReactNode[] = [];
+
+  if (planType) {
+    const planLabel = t(`github_copilot_quota.plan_${planType}`, { defaultValue: planType });
+    nodes.push(
+      h(
+        'div',
+        { key: 'plan', className: styleMap.codexPlan },
+        h('span', { className: styleMap.codexPlanLabel }, t('github_copilot_quota.plan_label')),
+        h('span', { className: styleMap.codexPlanValue }, planLabel)
+      )
+    );
+  }
+
+  if (resetDate) {
+    const resetLabel = formatQuotaResetTime(resetDate);
+    if (resetLabel && resetLabel !== '-') {
+      nodes.push(
+        h(
+          'div',
+          { key: 'reset', className: styleMap.codexPlan },
+          h('span', { className: styleMap.codexPlanLabel }, t('github_copilot_quota.reset_date')),
+          h('span', { className: styleMap.codexPlanValue }, resetLabel)
+        )
+      );
+    }
+  }
+
+  if (windows.length === 0) {
+    if (nodes.length === 0) {
+      return h('div', { className: styleMap.quotaMessage }, t('github_copilot_quota.no_plan_data'));
+    }
+    return h(Fragment, null, ...nodes);
+  }
+
+  nodes.push(
+    ...windows.map((window) => {
+      if (window.unlimited) {
+        const windowLabel = window.labelKey ? t(window.labelKey) : window.label;
+        return h(
+          'div',
+          { key: window.id, className: styleMap.quotaRow },
+          h(
+            'div',
+            { className: styleMap.quotaRowHeader },
+            h('span', { className: styleMap.quotaModel }, windowLabel),
+            h(
+              'div',
+              { className: styleMap.quotaMeta },
+              h('span', { className: styleMap.quotaPercent }, t('github_copilot_quota.unlimited'))
+            )
+          ),
+          h(QuotaProgressBar, {
+            percent: 100,
+            highThreshold: QUOTA_PROGRESS_HIGH_THRESHOLD,
+            mediumThreshold: QUOTA_PROGRESS_MEDIUM_THRESHOLD,
+          })
+        );
+      }
+
+      const percent = window.percentRemaining;
+      const percentLabel = percent === null ? '--' : `${Math.max(0, Math.min(100, percent))}%`;
+      const windowLabel = window.labelKey ? t(window.labelKey) : window.label;
+      const amountLabel =
+        window.remaining !== null && window.entitlement !== null
+          ? `${window.remaining} / ${window.entitlement}`
+          : window.remaining !== null
+            ? `${window.remaining}`
+            : null;
+
+      return h(
+        'div',
+        { key: window.id, className: styleMap.quotaRow },
+        h(
+          'div',
+          { className: styleMap.quotaRowHeader },
+          h('span', { className: styleMap.quotaModel }, windowLabel),
+          h(
+            'div',
+            { className: styleMap.quotaMeta },
+            h('span', { className: styleMap.quotaPercent }, percentLabel),
+            amountLabel ? h('span', { className: styleMap.quotaAmount }, amountLabel) : null
+          )
+        ),
+        h(QuotaProgressBar, {
+          percent: percent !== null ? Math.max(0, Math.min(100, percent)) : null,
+          highThreshold: QUOTA_PROGRESS_HIGH_THRESHOLD,
+          mediumThreshold: QUOTA_PROGRESS_MEDIUM_THRESHOLD,
+        })
+      );
+    })
+  );
+
+  return h(Fragment, null, ...nodes);
+};
+
+export const GITHUB_COPILOT_CONFIG: QuotaConfig<
+  GithubCopilotQuotaState,
+  { planType: string | null; windows: GithubCopilotQuotaWindow[]; resetDate: string | null }
+> = {
+  type: 'github-copilot',
+  i18nPrefix: 'github_copilot_quota',
+  cardIdleMessageKey: 'quota_management.card_idle_hint',
+  filterFn: (file) => isGithubCopilotFile(file) && !isDisabledAuthFile(file),
+  fetchQuota: fetchGithubCopilotQuota,
+  storeSelector: (state) => state.githubCopilotQuota,
+  storeSetter: 'setGithubCopilotQuota',
+  buildLoadingState: () => ({ status: 'loading', windows: [], resetDate: null }),
+  buildSuccessState: (data) => ({
+    status: 'success',
+    planType: data.planType,
+    windows: data.windows,
+    resetDate: data.resetDate,
+  }),
+  buildErrorState: (message, status) => ({
+    status: 'error',
+    error: message,
+    errorStatus: status,
+    windows: [],
+    resetDate: null,
+  }),
+  cardClassName: styles.githubCopilotCard,
+  controlsClassName: styles.githubCopilotControls,
+  controlClassName: styles.githubCopilotControl,
+  gridClassName: styles.githubCopilotGrid,
+  renderQuotaItems: renderGithubCopilotItems,
 };
 
 export const CLAUDE_CONFIG: QuotaConfig<

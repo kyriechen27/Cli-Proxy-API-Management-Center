@@ -17,6 +17,7 @@ import iconKimiDark from '@/assets/icons/kimi-dark.svg';
 import iconQwen from '@/assets/icons/qwen.svg';
 import iconIflow from '@/assets/icons/iflow.svg';
 import iconVertex from '@/assets/icons/vertex.svg';
+import iconGithubCopilot from '@/assets/icons/github-copilot.svg';
 
 interface ProviderState {
   url?: string;
@@ -30,6 +31,9 @@ interface ProviderState {
   callbackSubmitting?: boolean;
   callbackStatus?: 'success' | 'error';
   callbackError?: string;
+  userCode?: string;
+  verificationUri?: string;
+  accountType?: string;
 }
 
 interface IFlowCookieState {
@@ -72,6 +76,7 @@ function getErrorStatus(error: unknown): number | undefined {
 }
 
 const PROVIDERS: { id: OAuthProvider; titleKey: string; hintKey: string; urlLabelKey: string; icon: string | { light: string; dark: string } }[] = [
+  { id: 'github-copilot', titleKey: 'auth_login.github_copilot_oauth_title', hintKey: 'auth_login.github_copilot_oauth_hint', urlLabelKey: 'auth_login.github_copilot_oauth_url_label', icon: iconGithubCopilot },
   { id: 'codex', titleKey: 'auth_login.codex_oauth_title', hintKey: 'auth_login.codex_oauth_hint', urlLabelKey: 'auth_login.codex_oauth_url_label', icon: iconCodex },
   { id: 'anthropic', titleKey: 'auth_login.anthropic_oauth_title', hintKey: 'auth_login.anthropic_oauth_hint', urlLabelKey: 'auth_login.anthropic_oauth_url_label', icon: iconClaude },
   { id: 'antigravity', titleKey: 'auth_login.antigravity_oauth_title', hintKey: 'auth_login.antigravity_oauth_hint', urlLabelKey: 'auth_login.antigravity_oauth_url_label', icon: iconAntigravity },
@@ -152,6 +157,39 @@ export function OAuthPage() {
   };
 
   const startAuth = async (provider: OAuthProvider) => {
+    // GitHub Copilot uses a separate device flow API
+    if (provider === 'github-copilot') {
+      const accountType = states[provider]?.accountType || 'individual';
+      updateProviderState(provider, {
+        status: 'waiting',
+        polling: true,
+        error: undefined,
+        userCode: undefined,
+        verificationUri: undefined
+      });
+      try {
+        const res = await oauthApi.startDeviceAuth(accountType);
+        updateProviderState(provider, {
+          userCode: res.user_code,
+          verificationUri: res.verification_uri,
+          state: res.state,
+          status: 'waiting',
+          polling: true
+        });
+        if (res.state) {
+          startPolling(provider, res.state);
+        }
+      } catch (err: unknown) {
+        const message = getErrorMessage(err);
+        updateProviderState(provider, { status: 'error', error: message, polling: false });
+        showNotification(
+          `${t(getAuthKey(provider, 'oauth_start_error'))}${message ? ` ${message}` : ''}`,
+          'error'
+        );
+      }
+      return;
+    }
+
     const geminiState = provider === 'gemini-cli' ? states[provider] : undefined;
     const rawProjectId = provider === 'gemini-cli' ? (geminiState?.projectId || '').trim() : '';
     const projectId = rawProjectId
@@ -365,6 +403,25 @@ export function OAuthPage() {
               >
                 <div className={styles.cardContent}>
                   <div className={styles.cardHint}>{t(provider.hintKey)}</div>
+                  {provider.id === 'github-copilot' && (
+                    <div className={styles.accountTypeField}>
+                      <label className={styles.formItemLabel}>
+                        {t('auth_login.github_copilot_account_type_label')}
+                      </label>
+                      <select
+                        className={styles.accountTypeSelect}
+                        value={state.accountType || 'individual'}
+                        disabled={Boolean(state.polling)}
+                        onChange={(e) =>
+                          updateProviderState(provider.id, { accountType: e.target.value })
+                        }
+                      >
+                        <option value="individual">{t('auth_login.github_copilot_account_type_individual')}</option>
+                        <option value="business">{t('auth_login.github_copilot_account_type_business')}</option>
+                        <option value="enterprise">{t('auth_login.github_copilot_account_type_enterprise')}</option>
+                      </select>
+                    </div>
+                  )}
                   {provider.id === 'gemini-cli' && (
                     <div className={styles.geminiProjectField}>
                       <Input
@@ -381,6 +438,39 @@ export function OAuthPage() {
                         }
                         placeholder={t('auth_login.gemini_cli_project_id_placeholder')}
                       />
+                    </div>
+                  )}
+                  {provider.id === 'github-copilot' && state.userCode && (
+                    <div className={styles.deviceCodeBox}>
+                      <div className={styles.deviceCodeSection}>
+                        <div className={styles.authUrlLabel}>
+                          {t('auth_login.github_copilot_user_code_label')}
+                        </div>
+                        <div className={styles.deviceCode}>{state.userCode}</div>
+                        <div className={styles.authUrlActions}>
+                          <Button variant="secondary" size="sm" onClick={() => copyLink(state.userCode!)}>
+                            {t('auth_login.github_copilot_copy_code')}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className={styles.deviceCodeSection}>
+                        <div className={styles.authUrlLabel}>
+                          {t('auth_login.github_copilot_oauth_url_label')}
+                        </div>
+                        <div className={styles.authUrlValue}>{state.verificationUri}</div>
+                        <div className={styles.authUrlActions}>
+                          <Button variant="secondary" size="sm" onClick={() => copyLink(state.verificationUri!)}>
+                            {t('auth_login.github_copilot_copy_link')}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => window.open(state.verificationUri, '_blank', 'noopener,noreferrer')}
+                          >
+                            {t('auth_login.github_copilot_open_link')}
+                          </Button>
+                        </div>
+                      </div>
                     </div>
                   )}
                   {state.url && (

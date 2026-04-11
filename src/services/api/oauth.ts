@@ -10,11 +10,20 @@ export type OAuthProvider =
   | 'antigravity'
   | 'gemini-cli'
   | 'kimi'
-  | 'qwen';
+  | 'qwen'
+  | 'github-copilot';
 
 export interface OAuthStartResponse {
   url: string;
   state?: string;
+}
+
+export interface DeviceFlowResponse {
+  verification_uri: string;
+  user_code: string;
+  state: string;
+  expires_in: number;
+  interval: number;
 }
 
 export interface OAuthCallbackResponse {
@@ -52,6 +61,11 @@ export const oauthApi = {
   getAuthStatus: (state: string) =>
     apiClient.get<{ status: 'ok' | 'wait' | 'error'; error?: string }>(`/get-auth-status`, {
       params: { state }
+    }),
+
+  startDeviceAuth: (accountType: string = 'individual') =>
+    apiClient.get<DeviceFlowResponse>('/github-copilot-auth-url', {
+      params: { account_type: accountType }
     }),
 
   submitCallback: (provider: OAuthProvider, redirectUrl: string) => {

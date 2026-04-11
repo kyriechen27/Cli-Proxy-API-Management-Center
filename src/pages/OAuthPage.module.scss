@@ -159,6 +159,60 @@
   }
 }
 
+.accountTypeField {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-xs;
+}
+
+.accountTypeSelect {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  appearance: auto;
+
+  &:disabled {
+    background-color: var(--bg-tertiary);
+    border-color: var(--border-color);
+    color: var(--text-tertiary);
+    cursor: not-allowed;
+  }
+}
+
+.deviceCodeBox {
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border-color);
+  border-radius: $radius-md;
+  padding: $spacing-md;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+}
+
+.deviceCodeSection {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-xs;
+}
+
+.deviceCode {
+  font-size: 28px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+  letter-spacing: 4px;
+  color: var(--primary-color);
+  text-align: center;
+  padding: $spacing-md $spacing-lg;
+  background: var(--bg-primary);
+  border: 2px solid var(--primary-color);
+  border-radius: $radius-md;
+  user-select: all;
+}
+
 .formItem {
   display: flex;
   flex-direction: column;

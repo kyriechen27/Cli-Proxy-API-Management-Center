@@ -306,3 +306,53 @@ export interface KimiQuotaState {
   error?: string;
   errorStatus?: number;
 }
+
+// GitHub Copilot API payload types
+export interface GithubCopilotQuotaDetail {
+  entitlement?: number;
+  remaining?: number;
+  quota_remaining?: number;
+  percent_remaining?: number;
+  quota_id?: string;
+  unlimited?: boolean;
+}
+
+export interface GithubCopilotQuotaSnapshots {
+  chat?: GithubCopilotQuotaDetail;
+  completions?: GithubCopilotQuotaDetail;
+  premium_interactions?: GithubCopilotQuotaDetail;
+  [key: string]: GithubCopilotQuotaDetail | undefined;
+}
+
+export interface GithubCopilotUsagePayload {
+  copilot_plan?: string;
+  copilotPlan?: string;
+  organization_list?: unknown[];
+  organizationList?: unknown[];
+  quota_reset_date?: string;
+  quota_snapshots?: GithubCopilotQuotaSnapshots;
+  // Free tier fields
+  limited_user_quotas?: Record<string, number>;
+  monthly_quotas?: Record<string, number>;
+  limited_user_reset_date?: string;
+}
+
+export interface GithubCopilotQuotaWindow {
+  id: string;
+  label: string;
+  labelKey?: string;
+  entitlement: number | null;
+  remaining: number | null;
+  percentRemaining: number | null;
+  unlimited: boolean;
+  resetDate: string | null;
+}
+
+export interface GithubCopilotQuotaState {
+  status: 'idle' | 'loading' | 'success' | 'error';
+  planType?: string | null;
+  windows?: GithubCopilotQuotaWindow[];
+  resetDate?: string | null;
+  error?: string;
+  errorStatus?: number;
+}
