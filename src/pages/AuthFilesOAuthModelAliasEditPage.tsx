@@ -31,9 +31,10 @@ const OAUTH_PROVIDER_PRESETS = [
   'qwen',
   'kimi',
   'iflow',
+  'github_copilot',
 ];
 
-const OAUTH_PROVIDER_EXCLUDES = new Set(['all', 'unknown', 'empty']);
+const OAUTH_PROVIDER_EXCLUDES = new Set(['all', 'unknown', 'empty', 'oauth-excluded-models', 'oauth-model-alias']);
 
 const normalizeProviderKey = (value: string) => value.trim().toLowerCase();
 

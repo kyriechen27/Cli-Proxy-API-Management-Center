@@ -29,9 +29,10 @@ const OAUTH_PROVIDER_PRESETS = [
   'qwen',
   'kimi',
   'iflow',
+  'github_copilot',
 ];
 
-const OAUTH_PROVIDER_EXCLUDES = new Set(['all', 'unknown', 'empty']);
+const OAUTH_PROVIDER_EXCLUDES = new Set(['all', 'unknown', 'empty', 'oauth-excluded-models', 'oauth-model-alias']);
 
 const normalizeProviderKey = (value: string) => value.trim().toLowerCase();
 
@@ -224,13 +225,12 @@ export function AuthFilesOAuthExcludedEditPage() {
             : undefined;
 
         if (status === 404) {
-          setModelsList([]);
           setModelsError('unsupported');
-          return;
+        } else {
+          const errorMessage = err instanceof Error ? err.message : '';
+          showNotification(`${t('notification.load_failed')}: ${errorMessage}`, 'error');
         }
-
-        const errorMessage = err instanceof Error ? err.message : '';
-        showNotification(`${t('notification.load_failed')}: ${errorMessage}`, 'error');
+        setModelsList([]);
       })
       .finally(() => {
         if (cancelled) return;
